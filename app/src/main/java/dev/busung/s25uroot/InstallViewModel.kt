@@ -165,6 +165,13 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
                 executeExploit(payloads.exploit)
 
+                // The exploit has completed and the helper is now running with root.
+                // KernelSU executes a module's uninstall.sh during module cleanup. The
+                // existing bromitewebview script reboots this device, so neutralize only
+                // that script before loading KernelSU. This leaves the rest of the module
+                // handling to KernelSU while preventing the known reboot-triggering hook.
+                neutralizeBromiteWebViewUninstallScript()
+
                 setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
                 installKernelSu(payloads)
 
@@ -177,6 +184,22 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 finishHistory(InstallRunResult.Failed)
             }
         }
+    }
+
+    private fun neutralizeBromiteWebViewUninstallScript() {
+        val script = "/data/adb/modules/bromitewebview/uninstall.sh"
+        val command = """
+            if [ -f '$script' ]; then
+                /system/bin/cp '$script' '${script}.root-my-galaxy.bak'
+                /system/bin/printf '%s\\n' '#!/system/bin/sh' 'exit 0' > '$script'
+                /system/bin/chmod 755 '$script'
+            fi
+        """.trimIndent()
+        val result = runHelper("-c", command)
+        require(result.code == 0) {
+            "Failed to neutralize $script: ${result.output}"
+        }
+        appendLog("[*] Disabled bromitewebview uninstall.sh before KernelSU load")
     }
 
     private suspend fun executeExploit(payload: File) {
